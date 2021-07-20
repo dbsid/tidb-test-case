@@ -1,58 +1,33 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  generateName: naglfar-sysbench-benching-
+  generateName: naglfar-sysbench-benching-random-
 spec:
   entrypoint: starter
   onExit: delete-ns
   arguments:
     parameters:
-      - name: oltp_method
-        value: oltp_read_write                # oltp_point_select, oltp_insert, oltp_update_index, oltp_update_non_index, oltp_read_only, oltp_read_write, oltp_write_only
-      ######################################### current part
-      - name: release                           # release version: nightly, v3.0.x, v4.0.x
-        value: v5.0.1-pre
-      - name: tidb-url
-        value: ""
-      - name: tikv-url
-        value: ""
-      - name: pd-url
-        value: ""
+      - name: oltp_methods
+        #value: oltp_read_write                # oltp_point_select, oltp_insert, oltp_update_index, oltp_update_non_index, oltp_read_only, oltp_read_write, oltp_write_only
+        value: |
+          [
+            { "release": "v5.1.0", "oltp_method": "select_random_points", "thread": "100", "tidb-url": "", "tikv-url": "", "pd-url": ""  , "benchmark-id":"149430"},
+            { "release": "v5.0.3", "oltp_method": "select_random_points", "thread": "100", "tidb-url": "", "tikv-url": "", "pd-url": ""  , "benchmark-id":"149430"}
+          ]
       - name: toolset-tag                       # we use br to restore data, so you need fill in the toolset version
-        value: nightly              # option: nightly | v5.0-rc-nightly | release-4.0-nightly
-      ######################################### baseline part
-      - name: baseline-release
-        value: v5.0.0
-      - name: baseline-tidb-url                 # if need to patch baseline tidb binary version
-        value: ""
-      - name: baseline-tikv-url
-        value: ""
-      - name: baseline-pd-url
-        value: ""
-      - name: baseline-toolset-tag             # we use br to restore data, so you need fill in the toolset version
-        value: nightly                         # option: nightly | v5.0-rc-nightly | release-4.0-nightly
+        value: nightly                          # option: nightly | v5.0-rc-nightly | release-4.0-nightly
+
   templates:
     - name: starter
+      # parallelism: 1
       steps:
         - - name: create-ns
             template: create-ns
         - - name: request-cluster
             template: request-cluster
-        - - name: create-cluster
-            template: create-cluster
-            arguments:
-              parameters: [ { name: release-branch, value: "{{workflow.parameters.release}}" },
-                            { name: tidb-url, value: "{{workflow.parameters.tidb-url}}" },
-                            { name: tikv-url, value: "{{workflow.parameters.tikv-url}}" },
-                            { name: pd-url, value: "{{workflow.parameters.pd-url}}" } ]
-        - - name: importer-logs-1
-            template: importer-logs
-            arguments:
-              parameters: [ { name: toolset-tag,   value: "{{workflow.parameters.toolset-tag}}" },
-                            { name: release-branch, value: "{{workflow.parameters.release}}" } ]
-        - - name: benching-logs-1
-            template: benching-logs
-        
+        - - name: benching-logs-main
+            template: benching-logs-main
+
     - name: importer-logs
       inputs:
         parameters:
@@ -72,15 +47,93 @@ spec:
             template: workload-deletion
             arguments:
               parameters: [ { name: workload_name, value: "sysbench-importing" } ]
+    - name: benching-logs-main
+      parallelism: 1
+      steps:
+        - - name: benching-entry
+            template: benching-logs-full-process
+            arguments:
+              parameters:
+              - name: release
+                value: "{{item.release}}"
+              - name: oltp_method
+                value: "{{item.oltp_method}}"
+              - name: thread
+                value: "{{item.thread}}"
+              - name: tidb-url
+                value: "{{item.tidb-url}}"
+              - name: tikv-url
+                value: "{{item.tikv-url}}"
+              - name: pd-url
+                value: "{{item.pd-url}}"
+              - name: benchmark-id
+                value: "{{item.benchmark-id}}"
+            withParam: "{{workflow.parameters.oltp_methods}}"
+    - name: benching-logs-full-process
+      inputs:
+        parameters:
+          - name: release
+          - name: oltp_method
+          - name: thread
+          - name: tidb-url
+          - name: tikv-url
+          - name: pd-url
+          - name: benchmark-id
+      steps:
+
+        - - name: create-cluster
+            template: create-cluster
+            arguments:
+              parameters: [ { name: release-branch, value: "{{inputs.parameters.release}}" },
+                            { name: tidb-url, value: "{{inputs.parameters.tidb-url}}" },
+                            { name: tikv-url, value: "{{inputs.parameters.tikv-url}}" },
+                            { name: pd-url, value: "{{inputs.parameters.pd-url}}" } ]
+        - - name: importer-logs-step
+            template: importer-logs
+            arguments:
+              parameters: [ { name: toolset-tag,   value: "{{workflow.parameters.toolset-tag}}" },
+                            { name: release-branch, value: "{{inputs.parameters.release}}" } ]
+        - - name: benching-unit
+            template: benching-logs
+            arguments:
+              parameters:
+              - name: oltp_method
+                value: "{{inputs.parameters.oltp_method}}"
+              - name: thread
+                value: "{{inputs.parameters.thread}}"
+              - name: benchmark-id
+                value: "{{inputs.parameters.benchmark-id}}"
+              - name: release
+                value: "{{inputs.parameters.release}}"
+        - - name: uninstall-cluster
+            template: uninstall-cluster
+
+
     - name: benching-logs
+      inputs:
+        parameters:
+          - name: oltp_method
+          - name: thread
+          - name: benchmark-id
+          - name: release
       steps:
         - - name: benching
             template: benching
+            arguments:
+              parameters:
+              - name: oltp_method
+                value: "{{inputs.parameters.oltp_method}}"
+              - name: thread
+                value: "{{inputs.parameters.thread}}"
+              - name: benchmark-id
+                value: "{{inputs.parameters.benchmark-id}}"
+              - name: release
+                value: "{{inputs.parameters.release}}"
           - name: benching-logs
             template: logs
             arguments:
               parameters: [ { name: workload_name, value: "sysbench-benching" } ]
-        - - name: importing-deletion
+        - - name: workload-deletion-step
             template: workload-deletion
             arguments:
               parameters: [ { name: workload_name, value: "sysbench-benching" } ]
@@ -138,80 +191,64 @@ spec:
                 exclusive: true
               - name: m4
                 exclusive: true
-              - name: m5
-                exclusive: true  
-              - name: m6
-                exclusive: true 
-              - name: m7
-                exclusive: true 
-              - name: m8
-                exclusive: true             
             items:
               - name: tidb-1
                 spec:
-                  memory: 24GB
-                  cores: 8
+                  memory: 32GB
+                  cores: 16
                   machine: m1
               - name: tidb-2
                 spec:
-                  memory: 24GB
-                  cores: 8
-                  machine: m2    
+                  memory: 32GB
+                  cores: 16
+                  machine: m2
+              - name: tidb-3
+                spec:
+                  memory: 32GB
+                  cores: 16
+                  machine: m3
               - name: pd
                 spec:
-                  memory: 10GB
-                  cores: 8
-                  machine: m3
+                  memory: 8GB
+                  cores: 2
+                  machine: m4
               - name: tikv-1
                 spec:
-                  memory: 20GB
-                  cores: 8
+                  memory: 32GB
+                  cores: 16
                   disks:
                     disk1:
                       kind: nvme
                       mountPath: /disk1
-                  machine: m4
+                  machine: m1
               - name: tikv-2
                 spec:
-                  memory: 20GB
-                  cores: 8
+                  memory: 32GB
+                  cores: 16
                   disks:
                     disk1:
                       kind: nvme
                       mountPath: /disk1
-                  machine: m5  
+                  machine: m2
               - name: tikv-3
                 spec:
-                  memory: 20GB
-                  cores: 8
+                  memory: 32GB
+                  cores: 16
                   disks:
                     disk1:
                       kind: nvme
                       mountPath: /disk1
-                  machine: m6    
-              - name: tikv-4
-                spec:
-                  memory: 20GB
-                  cores: 8
-                  disks:
-                    disk1:
-                      kind: nvme
-                      mountPath: /disk1
-                  machine: m6        
-              - name: tikv-5
-                spec:
-                  memory: 20GB
-                  cores: 8
-                  disks:
-                    disk1:
-                      kind: nvme
-                      mountPath: /disk1                
-                  machine: m7    
+                  machine: m3
               - name: workload
                 spec:
                   memory: 8GB
-                  cores: 4
-                  machine: m8
+                  cores: 12
+                  machine: m4
+              - name: 2-haproxy
+                spec:
+                  memory: 8GB
+                  cores: 12
+                  machine: m4
     - name: create-cluster
       inputs:
         parameters:
@@ -232,9 +269,10 @@ spec:
           spec:
             resourceRequest: tidb-cluster
             tidbCluster:
-              tiupMirror: http://172.16.4.71:31888
+              tiupMirror: http://staging.tiup-server.pingcap.net
               serverConfigs:
                 tidb: |-
+                  prepared-plan-cache.enabled: true
                 tikv: |-
                   rocksdb.defaultcf.block-cache-size: "16GB"
                   rocksdb.writecf.block-cache-size: "9GB"
@@ -246,7 +284,22 @@ spec:
                 tikvDownloadURL: {{inputs.parameters.tikv-url}}
                 pdDownloadURL: {{inputs.parameters.pd-url}}
                 patchPolicy: Replace
-              control: tidb
+              control: tidb-1
+              haProxy:
+                host: 2-haproxy
+                port: 9999
+                version: latest
+                config: |-
+                  global
+                    daemon
+                    maxconn 10240
+
+                  defaults
+                    mode tcp
+                    timeout connect 5000ms
+                    timeout client 6000000ms
+                    timeout server 6000000ms
+
               tikv:
                 - host: tikv-1
                   port: 20160
@@ -266,34 +319,24 @@ spec:
                   deployDir: /disk1/deploy/tikv-20160
                   dataDir: /disk1/data/tikv-20160
                   logDir: /disk1/deploy/tikv-20160/log
-                - host: tikv-4
-                  port: 20160
-                  statusPort: 20180
-                  deployDir: /disk1/deploy/tikv-20160
-                  dataDir: /disk1/data/tikv-20160
-                  logDir: /disk1/deploy/tikv-20160/log
-                - host: tikv-5
-                  port: 20160
-                  statusPort: 20180
-                  deployDir: /disk1/deploy/tikv-20160
-                  dataDir: /disk1/data/tikv-20160
-                  logDir: /disk1/deploy/tikv-20160/log        
               tidb:
                 - host: tidb-1
                   deployDir: /disk1/deploy/tidb-4000
                 - host: tidb-2
-                  deployDir: /disk1/deploy/tidb-4000  
+                  deployDir: /disk1/deploy/tidb-4000
+                - host: tidb-3
+                  deployDir: /disk1/deploy/tidb-4000
               pd:
                 - host: pd
                   deployDir: /disk1/deploy/pd-2379
                   dataDir: /disk1/data/pd-2379
                   logDir: /disk1/deploy/pd-2379/log
               monitor:
-                - host: tidb
+                - host: tidb-1
                   deployDir: /disk1/deploy/prometheus-8249
                   dataDir: /disk1/deploy/prometheus-8249/data
               grafana:
-                - host: tidb
+                - host: tidb-1
                   deployDir: /disk1/deploy/grafana-3000
     - name: uninstall-cluster
       resource:
@@ -329,7 +372,7 @@ spec:
                   resourceRequest:
                     name: tidb-cluster
                     node: workload
-                  image: "docker.io/pingcap/br:{{inputs.parameters.toolset-tag}}"
+                  image: "hub.pingcap.net/perf_testing/bench-toolset:latest"
                   imagePullPolicy: IfNotPresent
                   command:
                     - /bin/bash
@@ -337,16 +380,21 @@ spec:
                     - |
                       #!/bin/bash
                       set -ex
-                      tidb=`echo $cluster_tidb0 | awk -F ":" '{print $1}'`
+                      export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+                      tidb=`echo $cluster_tidb | awk -F ":" '{print $1}'`
                       pd=`echo $cluster_pd0 | awk -F ":" '{print $1}'`
                       release_branch="{{inputs.parameters.release-branch}}"
-
                       sysbench --config-file=config select_random_points --tables=1 \
-                      --table-size=50000000 --rand-type=uniform --mysql-host=1tidb  \
-                      --mysql-port=4000 --mysql-user=root  --mysql-db=location --report-interval=1 \
+                      --table-size=50000000 --rand-type=uniform --mysql-host=$tidb  \
+                      --mysql-port=9999 --mysql-user=root  --mysql-db=location --report-interval=1 \
                       --events=0 --time=0 --threads=100 prepare
-
     - name: benching
+      inputs:
+        parameters:
+          - name: oltp_method
+          - name: thread
+          - name: benchmark-id
+          - name: release
       resource:
         action: create
         successCondition: status.state = succeeded
@@ -367,21 +415,20 @@ spec:
                   resourceRequest:
                     name: tidb-cluster
                     node: workload
-                  image: "hub.pingcap.net/mahjonp/bench-toolset"
-                  imagePullPolicy: IfNotPresent
+                  image: "hub.pingcap.net/perf_testing/bench-toolset:latest"
+                  imagePullPolicy: Always
                   command:
                     - /bin/sh
                     - -c
                     - |
                       set -ex
-                      tidb=`echo $cluster_tidb0 | awk -F ":" '{print $1}'`
-
+                      tidb=`echo $cluster_tidb | awk -F ":" '{print $1}'`
                       sysbench --config-file=config select_random_points 
                                     --tables=1 \
                                     --table-size=50000000 \
                                     --rand-type=uniform \
-                                    --mysql-host=1tidb  \
-                                    --mysql-port=4000  \
+                                    --mysql-host=$tidb  \
+                                    --mysql-port=9999  \
                                     --mysql-user=root  \
                                     --mysql-db=location \
                                     --report-interval=1 \
