@@ -384,9 +384,9 @@ spec:
                       tidb=`echo $cluster_tidb | awk -F ":" '{print $1}'`
                       pd=`echo $cluster_pd0 | awk -F ":" '{print $1}'`
                       release_branch="{{inputs.parameters.release-branch}}"
-                      sysbench --config-file=config select_random_points --tables=1 \
+                      sysbench select_random_points --tables=1 \
                       --table-size=50000000 --rand-type=uniform --mysql-host=$tidb  \
-                      --mysql-port=9999 --mysql-user=root  --mysql-db=location --report-interval=1 \
+                      --mysql-port=9999 --mysql-user=root --mysql-db=test --report-interval=1 \
                       --events=0 --time=0 --threads=100 prepare
     - name: benching
       inputs:
@@ -423,14 +423,14 @@ spec:
                     - |
                       set -ex
                       tidb=`echo $cluster_tidb | awk -F ":" '{print $1}'`
-                      sysbench --config-file=config select_random_points 
+                      sysbench select_random_points \
                                     --tables=1 \
                                     --table-size=50000000 \
                                     --rand-type=uniform \
                                     --mysql-host=$tidb  \
                                     --mysql-port=9999  \
                                     --mysql-user=root  \
-                                    --mysql-db=location \
+                                    --mysql-db=test \
                                     --report-interval=1 \
                                     --events=0           \
                                     --time=0             \
